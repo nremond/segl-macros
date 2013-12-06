@@ -5,6 +5,47 @@ import scala.language.experimental.macros
 object SeglMacros {
   import scala.reflect.macros.Context
 
+  def traceAround[T](body: T): T = macro traceAroundImpl[T]
+
+  def traceAroundImpl[T: c.WeakTypeTag](c: Context)(body: c.Expr[T]) : c.Expr[T] = {
+    import c.universe._
+
+    val DefDef(_, name, _, params, _, _) = c.enclosingMethod
+    val methodName = c.literal(name.decoded)
+
+    val allParams = params.flatten
+    val argsExpr = if(allParams.isEmpty) c.literal("no args.")
+    else {
+      val args = allParams.map(expr => {
+        val name = expr.name.decoded
+        val argName = c.literal(name)
+        val argValue = c.Expr(Ident(newTermName(name)))
+        reify { argName.splice + "='" + argValue.splice + "'"}
+      })
+      val repr = args.reduceLeft {
+        (acc, expr) => reify(acc.splice + ", " + expr.splice)
+      }
+      reify { "args: " + repr.splice }
+    }
+
+    val valName = newTermName(c.fresh("aroundRes$"))
+    val assignResult = ValDef(Modifiers(), valName, TypeTree(), body.tree)
+    val resIdent = Ident(valName)
+    val resValue = c.Expr(resIdent)
+    val typeName = c.literal(weakTypeTag[T].tpe.typeSymbol.name.toString)
+
+    c.Expr[T](Block(
+      List(
+        reify { println(s"Entering method '${methodName.splice}' with ${argsExpr.splice}") }.tree,
+        assignResult,
+        reify { println(s"Leaving method '${methodName.splice}' with result ${resValue.splice} (type: ${typeName.splice})") }.tree
+      ),
+      resIdent
+    ))
+  }
+
+
+
   def info(param: Any): Unit = macro infoImpl
 
   def infoImpl(c: Context)(param: c.Expr[Any]): c.Expr[Unit] = {

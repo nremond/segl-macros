@@ -6,9 +6,9 @@ import org.slf4j.LoggerFactory
 object MacroExamples {
   private implicit val logger = LoggerFactory.getLogger("macros")
 
+  def foo(a: String, b: Int) = traceAround { a.toUpperCase * b }
+
   def main(args: Array[String]) {
-    val a = 2
-    val b = 3
-    info(a + b)
+    println(foo("macros rules!! ", 3))
   }
 }
