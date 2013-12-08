@@ -1,0 +1,154 @@
+Introduction to Scala macros - Hands-on session
+
+Abstract
+
+Macros were introduced as an experimental feature in Scala 2.10 and they will be even more powerful in Scala 2.11. But what they are good for? How to develop with them? Are they as scary as they sound? In this Hands-on session, I will introduce Scala Macros and ask you to implement some simple macros. At the end of the session, I hope that you will be convinced that Macros are a powerful new tool in your Scala belt.
+
+Remember to bring your laptop!
+
+- Disclaimer : not an expert !
+- Why Macros?
+ - replace most runtime reflection with fast compiled code
+ - code generation at compile time
+ - removes boileplate
+ - faster code (removes runtime code)
+ - do impossible things
+ - examples: macrocosm (fast for loop, new literals, typesafe regex,...), expecty, MacWire, etc
+- Macros in 2.10.2
+ -def macros
+  - Hello Macro World: simple setup
+  -def macro definition + signature
+   - Context
+   - WeakTypeTag
+   - Expr
+  -working with the AST
+   - show / showRaw
+   - splice
+   - reify
+   - reflection API -> Universe
+  -debugging macros
+  -tips and tricks
+   - use c.fresh to declare new names instead of hardcoding them
+   - helper classes
+   - reporting warnings and errors
+ -implicit macros (see pickles)
+- What's coming in 2.11+
+ -quasiquotes
+ -macro bundles
+ -macro annotations (2.12)
+- Ready for production?
+
+Hands-on parts
+- Hello Macro World: simple setup
+- trace based on println
+- trace based on Slf4J -> see scalalogging: https://github.com/typesafehub/scalalogging/blob/master/scalalogging-slf4j/src/main/scala/com/typesafe/scalalogging/slf4j/LoggerMacros.scala
+ - get the logger from the outer scope (use prefix)
+ - use ifTraceEnabled
+- traceAround
+ - use ifTraceEnabled: if true log before and after execution of expression, if false, only execute expression
+ - get the name of the surrounding method and log it: use context.enclosingMethod
+ - get value of result and log it with its type
+ - use WeakTypeTag for type of result, i.e def traceAroundImpl[T: WeakTypeTag](...): Expr[T]
+
+
+Send requirements before the session:
+- SBT 0.12.x
+- Git
+
+* Setup
+ - clone repo git at URL ???
+ - start sbt on project
+ - for Intellij and Eclipse, run gen-idea or gen-eclipse inside SBT (need to configure these plugins in initial setup!!)
+ - macros needs to be compiled separately from the code using them, hence the 2 sub-projects (see Build.scala)
+
+* Ex1: Hello world
+ - import scala.language.experimental.macros
+ - def hello(): Unit = macro helloImpl
+ - def helloImpl(c: scala.reflect.macros.Context)(): c.Expr[Unit] = ???
+ - import c.universe._
+ - reify { println("Hello World!") } -> reify takes ordinary scala code and convert it to the corresponding AST
+ - Usage: in MacroExamples:
+  - import SeglMacros._
+  - hello()
+
+* Ex2: Hello ${world}
+ - Let's add a parameter to our macro method
+ - in MacroExamples: hello("Macros")
+ - SeglMacros:
+  - change hello signature to def hello(name: String): Unit
+  - change helloImpl signature to 'def helloImpl(c: Context)(value: c.Expr[String]): c.Expr[Unit]' -> compile and see error -> fix by using name instead of value
+  - change reify line to 'reify { println(s"Hello ${name}!") }' -> compile and see error -> fix by using splice
+  - Why splice: reify takes 'normal' scala code and turns it into an Expr, but 'name' is already an Expr and we don't want the Expr to be printed but its evaluation
+  - splice can be used only inside a reify block to mark an expression that is already reified, and to convert Expr[T] to T
+
+* Ex3: Logging: simple trace
+ - Goal: Automagically print the text of the expression argument along with its value:
+ - Example: trace(name) -> name = "toto" or trace(a + b) -> a + b = 5
+ - How? take the AST of the parameter passed to the macro and create a String representation
+ - show: Renders a representation of a AST as desugared code. Also very useful to debug manually created ASTs!
+ - val paramRep = show(param.tree)
+ - reify { println(paramRep + " = " + param.splice) } -> compile and see error about free term. reify cannot reference variables declared outside its scope. We need to create an Expr out of them.
+ - val paramRepExpr = c.Expr[String](Literal(Constant(paramRep))) -> creates an AST fragment for a constant (you can also use c.literal(...) instead)
+ - reify { println(paramRepExpr.splice + " = " + param.splice) } -> splice it
+ - Usage: note that representation of the expression a + b is a.+(b) (desugarized form). There are ways to get the exact text in the code, but more complicated and out of scope (see expecty)
+
+* Ex4: Logging with Slf4J
+ - Goal: we want to call the macro like this: info(a + b)
+   - we want this code to be generated: if(logger.isInfoEnabled) logger.info("a + b" = a + b)
+ - 2 problems here: a) getting the logger declared in the enclosing scope 2) generate the correct AST because we cannot rely entirely on reify now.
+ - let's find the logger! And play a little with the AST ...
+ - c.enclosingClass gives the AST of the class or object where the macro is called. We need to locate a val of type org.slf4j.Logger inside this AST. 
+ - Let's see the AST of the enclosingClass: showRaw to the rescue! showRaw can be used to print the raw representation of an AST (unlike show, which gives the Scala repr)
+OUCH!!
+ModuleDef(Modifiers(), io.segl.MacroExamples, Template(List(Select(Ident(scala), newTypeName("AnyRef"))), emptyValDef, List(DefDef(Modifiers(), nme.CONSTRUCTOR, List(), List(List()), TypeTree(), Block(List(Apply(Select(Super(This(newTypeName("MacroExamples")), tpnme.EMPTY), nme.CONSTRUCTOR), List())), Literal(Constant(())))), ValDef(Modifiers(PRIVATE | IMPLICIT), newTermName("logger "), TypeTree(), Apply(Select(Ident(newTermName("LoggerFactory")), newTermName("getLogger")), List(Literal(Constant("macros"))))), DefDef(Modifiers(), newTermName("main"), List(), List(List(ValDef(Modifiers(PARAM), newTermName("args"), AppliedTypeTree(Ident(newTypeName("Array")), List(Ident(newTypeName("String")))), EmptyTree))), Select(Ident(scala), scala.Unit), Block(List(ValDef(Modifiers(), newTermName("a"), TypeTree(), Literal(Constant(2))), ValDef(Modifiers(), newTermName("b"), TypeTree(), Literal(Constant(3)))), Apply(Apply(Ident(newTermName("log")), List(Literal(Constant("DEBUG")))), List(Literal(Constant("msg")), Apply(Select(Ident(newTermName("a")), newTermName("$plus")), List(Ident(newTermName("b")))))))))))
+
+ - Intimidating at first, but it doesn't take too long to understand. Just learn to deal with it!
+ - ModuleDef means we are in an object, a class would be a ClassDef. Template contains the body of the class/object: the 3rd element is a list containing all vals and defs in the body. 
+ - Look for ValDef(Modifiers(PRIVATE | IMPLICIT), newTermName("logger "), TypeTree(), Apply(Select(Ident(newTermName("LoggerFactory")), newTermName("getLogger")), List(Literal(Constant("macros")))))
+ - newTermName introduces names: we see 'logger' for the val name, 'LoggerFactory' for the Object name, 'getLogger' for the method name.
+ - Select identifies a method: here 'LoggerFactory.getLogger'. Apply represents the call of the selected method with a list of arguments.
+ - Let's use pattern matching to get the list of definitions:
+  - val body = c.enclosingClass match {
+      case ModuleDef(_, _, Template(_, _, b)) => b
+      case unknown =>
+        c.abort(c.enclosingPosition, s"Unknown type of enclosing class: ${unknown.getClass}")
+    }
+  - You should also pattern match ClassDef for a more general impl. Note c.abort: allows to emit compilation error; see also c.error, c.warning, c.info, c.echo
+ - Let's collect vals only, and keep the type name and the term name:
+  - val typeAndName = body.collect { case ValDef(_, termName, t, _) => t.tpe.toString -> termName }
+ - Find a val with type named 'org.slf4j.Logger' and retieve its term name; abort if not found:
+  - val foundLogger = typeAndName.find(_._1 == "org.slf4j.Logger")
+    val loggerTermName = foundLogger.getOrElse(c.abort(c.enclosingPosition, s"Could not find field of type 'org.slf4j.Logger' in enclosing class"))._2
+ - Now we need to create the AST for the code, let's start with : logger.info("test")
+ - To help undertanding which AST to generate, just hardcode something similar inside reify() and print it with showRaw: 
+ - val logger = LoggerFactory.getLogger("test")
+   println(showRaw(reify(logger.info("test"))))
+ - Result is: Expr(Apply(Select(Ident(newTermName("logger")), newTermName("info")), List(Literal(Constant("test")))))
+ - Lets' replace newTermName("logger") with term name we found, and use c.Expr[Unit] to create an Expr and let's test this!
+ - In order to log the arguments like before: just use reify and insert the tree inside the main tree:
+  - List(reify(paramRepExpr.splice + " = " + param.splice).tree)
+ - final code: c.Expr[Unit](Apply(Select(Ident(loggerTermName), newTermName("info")), List(reify(paramRepExpr.splice + " = " + param.splice).tree)))
+ - Let's add if part. We use the same trick as before with showRaw: println(showRaw(reify(if(logger.isInfoEnabled) logger.info("test"))))
+  - result: Expr(If(Apply(Select(Ident(newTermName("logger")), newTermName("isInfoEnabled")), List()), Apply(Select(Ident(newTermName("logger")), newTermName("info")), List(Literal(Constant("test")))), Literal(Constant(()))))
+  - we need to insert our previous tree inside the If tree. 
+  - Replace again loggerTermName for isInfoEnabled call. 
+  - Literal(Constant(())) is the () Unit value for the empty Else branch. You can also use c.literalUnit.tree
+  
+
+
+* Ex5: Logging around a method
+ - Goal: the code "def foo(a: String) = traceAround { a.toUpperCase }
+ - Should become: 
+def myMethod(a: String) = {
+  if(log.isTraceEnabled) log.trace("Entering method 'foo' with argument a = " + a)
+  val res = { a.toUpperCase }
+  if(log.isTraceEnabled) log.trace("Leaving method 'foo' with result = " + res + " (type: String)")
+  res  
+}
+ - TODO: 1) get the enclosing method and params 2) create a variable to hold the result of the block 3) get the type of the result
+ - Enclosing method: let's do the showRaw trick: println(showRaw(c.enclosingMethod))
+ DefDef(Modifiers(), newTermName("foo"), List(), List(List(ValDef(Modifiers(PARAM), newTermName("a"), Ident(newTypeName("String")), EmptyTree))), TypeTree(), Apply(Ident(newTermName("traceAround")), List(Select(Ident(newTermName("a")), newTermName("toUpperCase")))))
+ - pattern match to extract the name and the list of params: val DefDef(_, name, _, params, _, _) = c.enclosingMethod
+ - params is a List[List[ValDef]] because of currying where we can have multiple param lists, but here we dont care so we will flatten it
+ - Handling of multiple params left as an exercise... 
+ - 
